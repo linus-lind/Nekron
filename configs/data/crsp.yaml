@@ -1,0 +1,102 @@
+# Schema for the CRSP daily file (data/crsp.csv). Declaring both key columns makes this a
+# (date, entity) panel.
+
+defaults:
+  - /base_panel@_here_
+  - _self_
+
+schema:
+  date_column: DlyCalDt
+  entity_column: PERMNO  # null -> no entity key; the declared keys set the panel's grain
+  date_format: "%d/%m/%Y"  # strptime format for date_column and date_columns
+  date_columns:  # further columns parsed as dates
+    - SecInfoStartDt
+    - SecInfoEndDt
+    - SecurityBegDt
+    - SecurityEndDt
+    - DlyPrevDt
+  category_columns:  # columns read as pandas categoricals
+    - PrimaryExch
+    - ExchangeTier
+    - TradingStatusFlg
+    - ShareClass
+    - USIncFlg
+    - IssuerType
+    - SecurityType
+    - SecuritySubType
+    - ShareType
+    - SecurityActiveFlg
+    - DelActionType
+    - DelStatusType
+    - DelReasonType
+    - DelPaymentType
+    - SICCD
+    - NAICS
+    - DlyDelFlg
+    - DlyPrcFlg
+    - DlyCapFlg
+    - DlyPrevPrcFlg
+    - DlyPrevCapFlg
+    - DlyRetMissFlg
+    - DlyRetDurFlg
+    - DlyDistRetFlg
+  dtypes:  # column -> pandas dtype
+    PERMNO: int32
+    PERMCO: Int32
+    HdrCUSIP: string
+    CUSIP: string
+    CUSIP9: string
+    SecurityNm: string
+    Ticker: string
+    DlyPrc: float64
+    DlyCap: float64
+    DlyPrevPrc: float64
+    DlyPrevCap: float64
+    DlyRet: float64
+    DlyRetx: float64
+    DlyRetI: float64
+    DlyOrdDivAmt: float64
+    DlyFacPrc: float64
+    DlyVol: float64
+    DlyClose: float64
+    DlyLow: float64
+    DlyHigh: float64
+    DlyBid: float64
+    DlyAsk: float64
+    DlyOpen: float64
+    DlyNumTrd: float64
+    DlyPrcVol: float64
+    ShrOut: float64
+    vwretd: float64
+    vwretx: float64
+    ewretd: float64
+    ewretx: float64
+    sprtrn: float64
+
+selection:
+  start_date: "1990-01-01"  # ISO-8601; null -> unbounded
+  end_date: "2020-12-31"
+  entities: null  # null -> every entity
+  columns: [  # columns read from the file; null -> all of them
+    "DlyOpen",
+    "DlyHigh",
+    "DlyLow",
+    "DlyClose",
+    "DlyVol",
+    "DlyPrcVol",
+    "ShrOut",
+    "DlyFacPrc",
+    "DlyCap",
+  ]
+
+source:
+  format: csv  # registered formats: csv
+  csv:
+    path: data/crsp.csv
+    delimiter: ","
+    encoding: utf-8
+    decimal: "."
+    chunk_size: 200000  # rows per read chunk
+    na_values: []  # extra strings read as NaN
+    keep_default_na: true
+    sort: true  # sort by (date, entity) after loading

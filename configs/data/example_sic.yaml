@@ -1,0 +1,22 @@
+# EXAMPLE: static per-entity reference data, one row per permno and no date key.
+
+defaults:
+  - /base_panel@_here_
+  - _self_
+
+schema:
+  date_column: null  # no date key -> cross-section grain; join it with broadcast_entity
+  entity_column: PERMNO
+  date_format: "%Y-%m-%d"
+  # Categorical, not object: ~2 MB against ~100 MB once broadcast onto a daily spine.
+  category_columns: [sector, industry]
+  dtypes:
+    PERMNO: int32
+
+selection:
+  columns: [sector, industry]  # null -> every column of the file
+
+source:
+  format: csv
+  csv:
+    path: data/security_master.csv

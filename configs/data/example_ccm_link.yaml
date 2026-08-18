@@ -1,0 +1,28 @@
+# EXAMPLE: a CRSP/Compustat link table. Both key columns are null, which makes this a `table`
+# grain: it carries no index, is never aligned directly, and is referenced by name from a
+# join's `link` block. linkdt/linkenddt make the link time-variant (empty end -> still valid).
+
+defaults:
+  - /base_panel@_here_
+  - _self_
+
+schema:
+  date_column: null
+  entity_column: null
+  date_format: "%Y-%m-%d"
+  date_columns: [linkdt, linkenddt]  # validity window; a time-invariant link has neither
+  # raise | null. null reads a far-future sentinel such as 9999-12-31 as missing, which the
+  # link resolver treats as still valid; pandas 2.2 cannot parse it at all.
+  out_of_bounds_dates: "null"
+  category_columns: [iid]
+  dtypes:
+    gvkey: string
+    lpermno: int32
+
+selection:
+  columns: [gvkey, iid, lpermno, linkdt, linkenddt]  # null -> every column of the file
+
+source:
+  format: csv
+  csv:
+    path: data/ccm_link.csv

@@ -1,0 +1,8 @@
+# Shared MLflow tracking settings, composed as `mlflow: default` by every model config.
+
+enabled: true
+tracking_uri: sqlite:///mlflow.db
+experiment_name: Default
+run_name: null  # null -> MLflow generates one; model configs override it
+log_every_n_epochs: 1  # metric logging cadence
+log_model: true  # log the fitted model as a run artifact

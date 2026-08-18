@@ -1,0 +1,101 @@
+# LSTM-Transformer over conditional-autoencoder residuals.
+
+defaults:
+  - base_lstm_transformer
+  - mlflow: default
+  - _self_
+
+# The fitted conditional autoencoder whose pricing errors this model reads. Its own data
+# pipeline travels in the MLflow checkpoint and is replayed from there, so no
+# data_pipeline block belongs here.
+cae:
+  run_id: ???  # required: cae.run_id=<mlflow run id>
+  tracking_uri: sqlite:///mlflow.db
+  checkpoint_artifact: conditional_autoencoder_best.pt
+  device: cpu  # auto | cuda | mps | cpu; cpu keeps the one-off replay reproducible
+
+data:
+  seq_len: 252  # steps per window; needs a residual on every consecutive period
+  stride: 1  # keep one window per stride end positions; raise it to shorten an epoch
+  target_horizon: 0  # steps past the window at which the target is read; 0 -> no target
+  batch_size: 256  # windows per optimizer step
+  shuffle: true
+  # Take the split dates from the autoencoder's run; keeps that model out of sample.
+  inherit_cae_split: true
+  split:  # used only when inherit_cae_split: false
+    scheme: single  # single (cuts at train_end/val_end) | walk_forward
+    train_end: null  # ISO-8601; null -> train_fraction quantile of the dates
+    val_end: null  # null -> val_fraction quantile
+    date_level: date
+    train_fraction: 0.6  # require 0 < train_fraction <= val_fraction < 1
+    val_fraction: 0.8
+    burn_in: 0  # leading dates dropped before splitting
+
+model:
+  lstm:
+    hidden_dim: 128
+    num_layers: 2
+    bias: true
+    dropout: 0.0  # between stacked layers only; inert with num_layers: 1
+    bidirectional: true  # safe here: the window lies entirely before the scored date
+    output_dropout: 0.0
+
+  transformer:
+    d_model: 256  # working width; the LSTM output is projected to it when they differ
+    num_layers: 2  # 0 -> no attention
+    num_heads: 8  # must divide d_model, into an even head width under rope
+    ff_dim: 1024  # feed-forward width per block; conventionally 4 * d_model
+    activation: gelu  # relu | leaky_relu | elu | gelu | silu | tanh | sigmoid | identity
+    dropout: 0.1  # attention weights, feed-forward net and sublayer outputs
+    bias: true
+    norm_position: pre  # pre | post; pre trains a deep stack without a warm-up
+    positional_encoding: rope  # none | sinusoidal | rope
+    rope_base: 1.0e+04  # rotary frequency base; positional_encoding: rope only
+    # Restricts attention only; step-wise causality also needs lstm.bidirectional: false.
+    causal: false
+
+  pooling:
+    kind: last_mean  # last | mean | max | attention | last_mean | mean_max
+    attention_dim: 64  # kind: attention only
+    dropout: 0.0
+
+  head:
+    hidden_dims: [64]
+    out_dim: 1  # scores per window
+    activation: gelu
+    batch_norm: false
+    dropout: 0.0
+    bias: true
+    track_running_stats: true
+
+loss:
+  objective: none  # none is the only implemented objective: the run stops before fitting
+
+optim:
+  lr: 1.0e-04
+  weight_decay: 0.0  # AdamW decoupled L2; 0.0 is plain Adam
+  betas: [0.9, 0.999]  # Adam moment decays; exactly two values
+  lr_decay_gamma: 1.0  # per-epoch exponential LR decay; 1.0 disables
+
+train:
+  epochs: 100  # cap; early stopping usually ends the run first
+  early_stopping_patience: 10  # epochs without an improvement before stopping
+  min_delta: 0.0  # minimum gain in the selection metric to count as an improvement
+  grad_clip_norm: 1.0  # 0.0 disables; attention stacks spike early, so this clips by default
+  seed: 42
+  device: auto  # auto | cuda | mps | cpu (auto: cuda -> mps -> cpu)
+  checkpoint_dir: checkpoints
+  diagnostics:  # per-epoch gradient, update-ratio, sparsity and saturation metrics
+    enabled: true
+    every_n_steps: 1  # record every n-th step
+    zero_weight_tol: 1.0e-04  # |w| <= tol counts as driven to zero
+    saturation_tol: 1.0e-02  # distance from an activation's flat region; in (0, 1)
+
+# Training policy once the schedule has several folds; the schedule is data.split.
+cv:
+  seed_mode: fixed  # fixed | per_fold; per_fold offsets the seed by the fold index
+  on_fold_error: skip  # skip | raise; skip marks the fold FAILED and carries on
+
+mlflow:
+  experiment_name: lstm_transformer
+  run_name: baseline

@@ -1,0 +1,10 @@
+# Single-source alignment: CRSP is the spine and nothing is joined onto it, so the merged
+# panel is the CRSP panel.
+
+defaults:
+  - /base_alignment@_here_
+  - _self_
+
+spine: crsp
+joins: []  # see configs/alignment/example_multi_panel.yaml for the join syntax
+spine_columns: null  # null -> carry every spine column into the merged panel

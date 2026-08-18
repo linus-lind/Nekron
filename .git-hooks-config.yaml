@@ -1,0 +1,48 @@
+default_stages: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.ipynb$
+      - id: end-of-file-fixer
+        exclude: \.ipynb$
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+      - id: debug-statements
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint, auto-fix)
+        entry: python scripts/run_hook.py ruff
+        language: python
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy (strict, src and scripts)
+        entry: python scripts/run_hook.py mypy
+        language: python
+        types: [python]
+        pass_filenames: false
+
+      - id: ruff-format
+        name: ruff format (check)
+        entry: python scripts/run_hook.py format
+        language: python
+        types: [python]
+        pass_filenames: false
+
+      - id: tests
+        name: unit and integration tests
+        entry: python scripts/run_hook.py tests
+        language: python
+        stages: [pre-push]
+        pass_filenames: false

@@ -1,0 +1,380 @@
+# Feature set for the CRSP daily panel (data/crsp.csv). Featurizers run top to bottom, so a
+# later one may read an earlier one's output.
+
+defaults:
+  - /base_features@_here_
+  - _self_
+
+keep_inputs:
+  include: []  # [] -> drop every raw panel column; null -> keep them all; or list a subset
+keep_features:
+  exclude: []  # computed but not output; per-spec `intermediate` covers scaffolding
+output_dtype: float32  # null -> float64
+drop_warmup: true  # drop the leading dates where a retained feature has no history yet
+
+featurizers:
+  # --- returns ----------------------------------------------------------------
+  - type: log_returns
+    params:
+      input_column: DlyClose
+      horizons: [1, 5, 21, 63, 126, 252]
+      output_names: [logret_1d, logret_5d, logret_1m, logret_3m, logret_6m, logret_12m]
+  - type: simple_returns
+    params:
+      input_column: DlyClose
+      horizons: [1]
+      output_names: [ret_1d]
+  - type: forward_returns
+    params:
+      input_column: DlyClose
+      horizons: [1]
+      output_names: [fwd_ret_1d]
+      method: simple
+  - type: intraday_return
+    params: {open_column: DlyOpen, close_column: DlyClose, output_name: intraday_ret, method: simple}
+  - type: overnight_return
+    params: {open_column: DlyOpen, close_column: DlyClose, output_name: overnight_ret, method: simple}
+
+  # --- price action -----------------------------------------------------------
+  - type: log_price
+    params: {input_column: DlyClose, output_name: log_price}
+  - type: high_low_range
+    params: {high_column: DlyHigh, low_column: DlyLow, close_column: DlyClose, output_name: hl_range}
+  - type: candle_position
+    params: {high_column: DlyHigh, low_column: DlyLow, close_column: DlyClose, output_name: candle_pos}
+
+  # --- momentum / trend -------------------------------------------------------
+  - type: momentum  # 12-1 and 12-2, defined by day offsets
+    params:
+      input_column: DlyClose
+      near_offsets: [21, 42]
+      far_offsets: [252, 252]
+      output_names: [mom_12_1, mom_12_2]
+      method: log
+  - type: moving_average
+    params:
+      input_column: DlyClose
+      windows: [20, 50, 200]
+      output_names: [sma_20, sma_50, sma_200]
+      kind: sma
+      min_periods: 20
+      adjust: false
+  - type: moving_average
+    params:
+      input_column: DlyClose
+      windows: [12, 26]
+      output_names: [ema_12, ema_26]
+      kind: ema
+      min_periods: 12
+      adjust: false
+  - type: price_to_moving_average
+    params:
+      input_column: DlyClose
+      windows: [50, 200]
+      output_names: [px_to_sma_50, px_to_sma_200]
+      kind: sma
+      min_periods: 50
+      adjust: false
+  - type: moving_average_ratio
+    params:
+      input_column: DlyClose
+      fast_windows: [50]
+      slow_windows: [200]
+      output_names: [ma_ratio_50_200]
+      kind: sma
+      min_periods: 50
+      adjust: false
+  - type: macd
+    params:
+      input_column: DlyClose
+      fast_span: 12
+      slow_span: 26
+      signal_span: 9
+      output_names: [macd_line, macd_signal, macd_hist]
+      adjust: false
+      min_periods: 26
+  - type: distance_from_rolling_extreme
+    params:
+      price_column: DlyClose
+      extreme_column: DlyHigh
+      windows: [252]
+      output_names: [dist_52w_high]
+      kind: max
+      min_periods: 252
+  - type: distance_from_rolling_extreme
+    params:
+      price_column: DlyClose
+      extreme_column: DlyLow
+      windows: [252]
+      output_names: [dist_52w_low]
+      kind: min
+      min_periods: 252
+  - type: adx
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      period: 14
+      output_names: [adx_14, plus_di_14, minus_di_14]
+      min_periods: 14
+  - type: aroon
+    params: {high_column: DlyHigh, low_column: DlyLow, window: 25, output_names: [aroon_up_25, aroon_down_25, aroon_osc_25]}
+  - type: true_strength_index
+    params: {close_column: DlyClose, long_span: 25, short_span: 13, output_name: tsi, adjust: false, min_periods: 25}
+  - type: linear_trend_slope
+    params: {input_column: DlyClose, windows: [63], output_names: [trend_slope_3m], use_log: true}
+
+  # --- volatility -------------------------------------------------------------
+  - type: realized_volatility
+    params:
+      return_column: logret_1d
+      windows: [21, 63, 252]
+      output_names: [rvol_1m, rvol_3m, rvol_12m]
+      min_periods: 21
+      ddof: 1
+      annualization_factor: 15.874507866387544  # sqrt(252): daily to annual
+  - type: ewma_volatility
+    params:
+      return_column: logret_1d
+      output_name: ewma_vol
+      alpha: 0.06  # RiskMetrics lambda 0.94
+      min_periods: 21
+      annualization_factor: 15.874507866387544
+  - type: parkinson_volatility
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      windows: [21]
+      output_names: [parkinson_1m]
+      min_periods: 21
+      annualization_factor: 15.874507866387544
+  - type: garman_klass_volatility
+    params:
+      open_column: DlyOpen
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      windows: [21]
+      output_names: [garman_klass_1m]
+      min_periods: 21
+      annualization_factor: 15.874507866387544
+  - type: rogers_satchell_volatility
+    params:
+      open_column: DlyOpen
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      windows: [21]
+      output_names: [rogers_satchell_1m]
+      min_periods: 21
+      annualization_factor: 15.874507866387544
+  - type: yang_zhang_volatility
+    params:
+      open_column: DlyOpen
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      windows: [21]
+      output_names: [yang_zhang_1m]
+      min_periods: 21
+      annualization_factor: 15.874507866387544
+  - type: average_true_range
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      windows: [14]
+      output_names: [atr_pct_14]
+      min_periods: 14
+      normalize: true
+  - type: downside_deviation
+    params:
+      return_column: logret_1d
+      windows: [63]
+      output_names: [downside_dev_3m]
+      min_periods: 63
+      threshold: 0.0
+      annualization_factor: 15.874507866387544
+  - type: bollinger_bands
+    params:
+      close_column: DlyClose
+      windows: [20]
+      pct_b_names: [bb_pctb_20]
+      bandwidth_names: [bb_bandwidth_20]
+      num_std: 2.0
+      min_periods: 20
+      ddof: 0  # Bollinger convention: population std
+  - type: ulcer_index
+    params: {close_column: DlyClose, windows: [63], output_names: [ulcer_3m]}
+  - type: max_drawdown
+    params: {close_column: DlyClose, windows: [252], output_names: [max_drawdown_12m]}
+  - type: rolling_aggregation  # higher moments of daily returns
+    params:
+      input_column: logret_1d
+      windows: [63]
+      output_names: [ret_skew_3m]
+      how: skew
+      min_periods: 63
+      ddof: 1
+  - type: rolling_aggregation
+    params:
+      input_column: logret_1d
+      windows: [63]
+      output_names: [ret_kurt_3m]
+      how: kurt
+      min_periods: 63
+      ddof: 1
+  - type: rolling_aggregation  # MAX lottery demand (Bali-Cakici-Whitelaw)
+    params:
+      input_column: ret_1d
+      windows: [21]
+      output_names: [max_ret_1m]
+      how: max
+      min_periods: 15
+      ddof: 1
+
+  # --- liquidity --------------------------------------------------------------
+  - type: amihud_illiquidity
+    params:
+      return_column: ret_1d
+      dollar_volume_column: DlyPrcVol
+      windows: [21, 252]
+      output_names: [amihud_1m, amihud_12m]
+      min_periods: 15
+      scale: 1000000.0
+  - type: dollar_volume
+    params: {price_column: DlyClose, volume_column: DlyVol, output_name: log_dollar_vol, log: true}
+  - type: turnover
+    params: {volume_column: DlyVol, shares_column: ShrOut, output_name: turnover}
+  - type: market_cap
+    params: {price_column: DlyClose, shares_column: ShrOut, output_name: log_mktcap, log: true}
+  - type: roll_spread
+    params: {price_column: DlyClose, windows: [21], output_names: [roll_spread_1m], min_periods: 15, normalize: true}
+  - type: corwin_schultz_spread
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      windows: [21]
+      output_names: [corwin_schultz_1m]
+      min_periods: 15
+  - type: kyle_lambda
+    params:
+      return_column: ret_1d
+      dollar_volume_column: DlyPrcVol
+      windows: [21]
+      output_names: [kyle_lambda_1m]
+      min_periods: 15
+  - type: zero_return_fraction
+    params:
+      return_column: ret_1d
+      windows: [21]
+      output_names: [zero_ret_frac_1m]
+      min_periods: 15
+      tolerance: 0.00000001
+
+  # --- oscillators ------------------------------------------------------------
+  - type: rsi
+    params: {close_column: DlyClose, periods: [14], output_names: [rsi_14], min_periods: 14}
+  - type: stochastic
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      window: 14
+      smooth_k: 3
+      smooth_d: 3
+      k_name: stoch_k
+      d_name: stoch_d
+      min_periods: 14
+  - type: williams_r
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      window: 14
+      output_name: williams_r_14
+      min_periods: 14
+  - type: cci
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      windows: [20]
+      output_names: [cci_20]
+      constant: 0.015
+  - type: ultimate_oscillator
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      periods: [7, 14, 28]
+      weights: [4.0, 2.0, 1.0]
+      output_name: ultimate_osc
+      min_periods: 28
+  - type: awesome_oscillator
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      fast_window: 5
+      slow_window: 34
+      output_name: awesome_osc
+      min_periods: 34
+
+  # --- price-volume -----------------------------------------------------------
+  - type: on_balance_volume
+    params: {close_column: DlyClose, volume_column: DlyVol, output_name: obv}
+    intermediate: [obv]  # cumulative level; only its difference is a feature
+  - type: accumulation_distribution
+    params: {high_column: DlyHigh, low_column: DlyLow, close_column: DlyClose, volume_column: DlyVol, output_name: adl}
+  - type: chaikin_money_flow
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      volume_column: DlyVol
+      windows: [20]
+      output_names: [cmf_20]
+      min_periods: 20
+  - type: money_flow_index
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      close_column: DlyClose
+      volume_column: DlyVol
+      windows: [14]
+      output_names: [mfi_14]
+      min_periods: 14
+  - type: force_index
+    params: {close_column: DlyClose, volume_column: DlyVol, span: 13, output_name: force_index_13, adjust: false, min_periods: 13}
+  - type: ease_of_movement
+    params:
+      high_column: DlyHigh
+      low_column: DlyLow
+      volume_column: DlyVol
+      window: 14
+      output_name: eom_14
+      volume_scale: 100000000.0
+      min_periods: 14
+  - type: volume_price_trend
+    params: {close_column: DlyClose, volume_column: DlyVol, output_name: vpt}
+
+  # --- time-series normalization ----------------------------------------------
+  - type: rolling_aggregation  # average turnover
+    params:
+      input_column: turnover
+      windows: [21, 252]
+      output_names: [turnover_avg_1m, turnover_avg_12m]
+      how: mean
+      min_periods: 15
+      ddof: 1
+  - type: rolling_zscore  # volume spike
+    params: {input_column: DlyVol, windows: [21], output_names: [volume_zscore_1m], min_periods: 21, ddof: 1}
+  - type: difference  # stationarize the cumulative OBV level
+    params: {input_column: obv, periods: [1], output_names: [obv_change]}
+
+  # --- calendar ---------------------------------------------------------------
+  - type: calendar_features
+    params:
+      attributes: [day_of_week, month, is_month_end]
+      output_names: [day_of_week, month, is_month_end]

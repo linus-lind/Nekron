@@ -1,0 +1,37 @@
+# EXAMPLE: quarterly fundamentals keyed by (datadate, gvkey+iid), linked onto a CRSP permno
+# spine through a CCM link table. Point source.csv.path at your own extract.
+
+defaults:
+  - /base_panel@_here_
+  - _self_
+
+schema:
+  date_column: datadate
+  entity_column: gvkey  # the source's own identifier; the join translates it to the spine's
+  date_format: "%Y-%m-%d"
+  entity_name: gvkey  # name of the entity index level, kept as the vendor's
+  # rdq is the date the filing became public; the join names it as availability_column.
+  # Matching on datadate instead would hand the model figures months early.
+  date_columns:
+    - rdq
+  category_columns:
+    - iid
+  dtypes:
+    gvkey: string
+    atq: float64  # total assets
+    ceqq: float64  # common equity
+    niq: float64  # net income
+    revtq: float64  # revenue
+    dlttq: float64  # long-term debt
+
+selection:
+  start_date: null  # ISO-8601; null -> unbounded
+  end_date: null
+  entities: null
+  columns: [atq, ceqq, niq, revtq, dlttq, rdq, iid]  # null -> every column of the file
+
+source:
+  format: csv
+  csv:
+    path: data/compustat_quarterly.csv
+    chunk_size: 200000  # rows per read chunk

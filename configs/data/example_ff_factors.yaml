@@ -1,0 +1,25 @@
+# EXAMPLE: Fama-French style daily factors, one row per date and no entity key.
+
+defaults:
+  - /base_panel@_here_
+  - _self_
+
+schema:
+  date_column: date
+  entity_column: null  # no entity key -> time-series grain; join it with broadcast_time
+  date_format: "%Y%m%d"
+  dtypes:  # column -> pandas dtype
+    mktrf: float64
+    smb: float64
+    hml: float64
+    rmw: float64
+    cma: float64
+    rf: float64
+
+selection:
+  columns: [mktrf, smb, hml, rmw, cma, rf]  # null -> every column of the file
+
+source:
+  format: csv
+  csv:
+    path: data/ff5_daily.csv

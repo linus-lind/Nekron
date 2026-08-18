@@ -1,0 +1,174 @@
+# Conditional autoencoder: model, optimization and the data pipeline feeding it.
+
+defaults:
+  - base_conditional_autoencoder
+  - mlflow: default
+  # Each source mounts under the name the pipeline refers to it by.
+  - data@data_pipeline.ingestion.panels.crsp: crsp
+  - preprocessing@data_pipeline.preprocessing.panels.crsp: crsp
+  - alignment@data_pipeline.alignment: crsp
+  - features@data_pipeline.features.merged: crsp  # runs on the merged panel
+  - _self_
+
+data:
+  portfolio_columns:  # characteristics forming the managed portfolios; [] -> every beta column
+    - log_mktcap
+    - mom_12_1
+    - mom_12_2
+    - logret_5d
+    - logret_1m
+    - logret_3m
+    - logret_6m
+    - logret_12m
+    - dist_52w_high
+    - dist_52w_low
+    - trend_slope_3m
+    - rvol_1m
+    - rvol_3m
+    - rvol_12m
+    - ewma_vol
+    - parkinson_1m
+    - garman_klass_1m
+    - atr_pct_14
+    - downside_dev_3m
+    - max_ret_1m
+    - ret_skew_3m
+    - ret_kurt_3m
+    - max_drawdown_12m
+    - ulcer_3m
+    - amihud_1m
+    - amihud_12m
+    - log_dollar_vol
+    - turnover
+    - turnover_avg_1m
+    - turnover_avg_12m
+    - roll_spread_1m
+    - corwin_schultz_1m
+    - kyle_lambda_1m
+    - zero_ret_frac_1m
+    - volume_zscore_1m
+    - px_to_sma_50
+    - px_to_sma_200
+    - ma_ratio_50_200
+    - adx_14
+    - aroon_osc_25
+    - tsi
+    - rsi_14
+    - cci_20
+    - bb_pctb_20
+    - bb_bandwidth_20
+    - cmf_20
+    - mfi_14
+    - obv_change
+    - overnight_ret
+    - intraday_ret
+  return_column: fwd_ret_1d  # prediction target; never a beta input
+  exclude_columns: []  # extra columns kept out of the beta inputs; name any forward-looking column
+  date_level: 0  # index level positions of (date, entity)
+  entity_level: 1
+  standardize: true  # per period: rank-transform characteristics, z-score returns
+  min_cross_section: 100  # min stocks per period; must exceed len(portfolio_columns)
+  batch_periods: 32  # periods per optimizer step
+
+model:
+  num_factors: 6  # K, the shared output width of both networks
+  beta_network:  # per-stock inputs -> loadings; hidden_dims [] -> linear map
+    hidden_dims: [32,16,8]
+    activation: relu  # relu | leaky_relu | elu | gelu | silu | tanh | sigmoid | identity
+    batch_norm: false
+    dropout: 0.0
+    bias: true
+    track_running_stats: true
+  factor_network:  # portfolio vector -> factors, once per period
+    hidden_dims: []
+    activation: relu
+    batch_norm: false  # must stay false: no batch dimension per period
+    dropout: 0.0
+    bias: false
+    track_running_stats: true
+
+loss:
+  l1_lambda: 1.0e-04  # LASSO coefficient on both networks' weight matrices; >= 0
+  # proximal | subgradient. proximal soft-thresholds the weights after each step (exact
+  # zeros); subgradient adds the penalty to the loss, where Adam normalizes it away.
+  # The two are ~1/l1_lambda apart, so a coefficient is not portable between them.
+  l1_mode: proximal
+
+optim:
+  lr: 1.0e-03
+  weight_decay: 0.0  # AdamW decoupled L2; 0.0 is plain Adam
+  betas: [0.9, 0.999]  # Adam moment decays; exactly two values
+  lr_decay_gamma: 0.99  # per-epoch exponential LR decay; 1.0 disables
+
+train:
+  epochs: 250  # cap; early stopping usually ends the run first
+  early_stopping_patience: 25  # epochs without an improvement before stopping
+  min_delta: 1.0e-04  # minimum gain in selection_metric to count as an improvement
+  grad_clip_norm: 0.0  # 0.0 disables; set it from a run's grad/norm_p90
+  seed: 42
+  device: auto  # auto | cuda | mps | cpu (auto: cuda -> mps -> cpu)
+  selection_metric: total_r2  # total_r2 | predictive_r2, both higher-is-better
+  checkpoint_dir: checkpoints
+  diagnostics:  # per-epoch gradient, update-ratio, sparsity and saturation metrics
+    enabled: true
+    every_n_steps: 1  # record every n-th step
+    zero_weight_tol: 1.0e-04  # |w| <= tol counts as driven to zero
+    saturation_tol: 1.0e-02  # distance from an activation's flat region; in (0, 1)
+
+# The forecast lambda_{t-1} that predictive R^2 prices against; total R^2 never uses it.
+# One forecast per fold, warmed on train and carried in date order through val into test.
+factor_forecast:
+  mode: expanding_mean  # expanding_mean (prevailing mean of every factor seen) | ewma
+  ewma_alpha: 0.01  # weight on the newest factor, in (0, 1]; halflife ~ 69 periods. mode: ewma only
+
+# Training policy once the schedule has several folds; the schedule is data_pipeline.split.
+cv:
+  seed_mode: fixed  # fixed | per_fold; per_fold offsets the seed by the fold index
+  on_fold_error: raise  # skip | raise; skip marks the fold FAILED and carries on
+
+mlflow:
+  experiment_name: conditional_autoencoder
+  run_name: T00
+
+data_pipeline:
+  ingestion:
+    panels:
+      crsp:
+        selection:
+          # Stated explicitly rather than left unbounded: the window is part of a
+          # tuning campaign's identity, and "everything the file happens to hold"
+          # moves silently when the file is refreshed. 2020 onward is held back
+          # untouched for the end-to-end strategy evaluation and must not be read
+          # here.
+          start_date: "1990-01-01"  # ISO-8601; null -> unbounded
+          end_date: "2019-12-31"
+        filters:  # registered types: top_n_market_cap
+          - type: top_n_market_cap
+            params:
+              n: 1000  # keep the n largest by market cap on each date
+              market_cap_column: DlyCap
+
+  # Stage artifacts keyed by a digest chaining every preceding stage's config.
+  cache:
+    enabled: true
+    directory: .nekron_cache
+    compression: zstd  # zstd | lz4 | uncompressed
+    fingerprint: content  # stat (size+mtime) | content (SHA-256, ~0.34 s/GB; survives cp -p, rsync -t)
+
+  split:
+    scheme: walk_forward  # single (cuts at train_end/val_end) | walk_forward (block below)
+    train_end: "2019-01-01"  # ISO-8601; null -> train_fraction quantile of the dates
+    val_end: "2020-01-01"  # null -> val_fraction quantile
+    date_level: date
+    train_fraction: 0.6  # require 0 < train_fraction <= val_fraction < 1
+    val_fraction: 0.8
+    burn_in: 0  # leading dates dropped before splitting (feature warm-up)
+
+    walk_forward:  # used only when scheme: walk_forward
+      mode: rolling  # rolling | expanding (expanding anchors the train window at the sample start)
+      train_size: 1260  # window sizes in periods (dates), not calendar days
+      val_size: 252
+      test_size: 252
+      step: null  # fold advance; null -> test_size, so test windows tile edge to edge
+      purge: 0  # periods dropped at each inner boundary; >= target horizon - 1
+      max_folds: null  # null -> every fold the sample admits

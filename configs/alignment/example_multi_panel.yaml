@@ -1,0 +1,62 @@
+# EXAMPLE: four sources merged onto the CRSP daily panel. Mount it with its source configs:
+#
+#   - data@data_pipeline.ingestion.panels.crsp: crsp
+#   - data@data_pipeline.ingestion.panels.compustat: example_compustat
+#   - data@data_pipeline.ingestion.panels.ff: example_ff_factors
+#   - data@data_pipeline.ingestion.panels.sic: example_sic
+#   - data@data_pipeline.ingestion.panels.ccm: example_ccm_link
+#   - alignment@data_pipeline.alignment: example_multi_panel
+
+defaults:
+  - /base_alignment@_here_
+  - _self_
+
+spine: crsp  # panel whose (date, entity) index the merged panel takes; joins only add columns
+
+joins:
+  # Quarterly fundamentals keyed by gvkey on a permno spine: `link` translates the
+  # identifier, `aligner` decides which row is knowable on each date.
+  - panel: compustat
+    link:
+      mode: table  # identity | table | spine
+      table: ccm  # the ingested link-table panel; required for mode: table
+      source_keys: [gvkey, iid]  # composite join key on the source panel
+      table_keys: [gvkey, iid]  # matching columns on the link table; null -> source_keys
+      target: lpermno  # column holding the spine's entity id
+      valid_from: linkdt  # validity window; both null -> time-invariant link
+      valid_to: linkenddt
+      normalize:  # per key column: strip | upper | zfill | empty_as_missing
+        # zfill is per column: padding the 2-char iid to 6 kills every match
+        gvkey: {strip: true, zfill: 6}
+        iid: {strip: true}
+      on_ambiguous: error  # error | first | last: one key resolving to several targets at a date
+      on_unmatched: drop  # drop | keep | error
+      on_collision: error  # error | first | last | sum | mean; two source rows on one key
+    aligner:
+      type: asof_entity  # exact | asof_entity | broadcast_time | broadcast_entity
+      params:
+        availability_column: rdq  # the date the filing became public, not datadate
+        lag: 0D  # offset added to the availability date before matching
+        tolerance: 400D  # older than this counts as stale, not as data
+        allow_exact: true  # false requires strictly earlier availability
+    columns: [atq, ceqq, niq, revtq, dlttq]  # null -> every column of the source
+    prefix: cs_  # prepended to each taken column, keeping the vendor namespace separate
+    min_coverage: 0.5  # min share of spine rows receiving a value; 0.0 disables the check
+
+  # One row per date, broadcast to every entity on that date.
+  - panel: ff
+    aligner:
+      type: broadcast_time
+      params:
+        as_of: true  # carry the last known value onto dates the source lacks
+        tolerance: 5D  # max age of a backward fill; needs as_of: true
+    columns: [mktrf, smb, hml, rf]
+    required: true  # error if the source matches no spine row at all
+
+  # One row per entity, broadcast across every date.
+  - panel: sic
+    aligner:
+      type: broadcast_entity
+    columns: [sector]
+
+spine_columns: null  # null -> carry every spine column into the merged panel

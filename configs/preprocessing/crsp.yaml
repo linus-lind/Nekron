@@ -1,0 +1,70 @@
+# Cleaning pipeline for the CRSP daily file, applied in order. Registered types:
+# trading_calendar, deduplicate, nan_entity_filter, cumulative_factor, corporate_adjustment,
+# consistency, forward_fill, constant_fill.
+
+defaults:
+  - /base_preprocessing@_here_
+  - _self_
+
+steps:
+  - type: trading_calendar
+    params:
+      calendar: XNYS  # exchange_calendars code; non-session dates are dropped
+
+  - type: deduplicate  # merge rows sharing a key: numeric by mean, else first non-null
+    params:
+      keys: []  # [] -> the full (date, entity) index
+
+  - type: nan_entity_filter  # drop an entity whose NaN share exceeds the threshold
+    params:
+      threshold: 0.2  # columns omitted -> every column is evaluated
+
+  # Compound CRSP's per-period DlyFacPrc into a cumulative factor; applied row-wise it
+  # would adjust nothing.
+  - type: cumulative_factor
+    params:
+      factor_column: DlyFacPrc
+      output_column: CumFacPrc
+
+  # Split/distribution adjustment: divide prices, multiply shares and volume, so market cap
+  # and dollar volume stay split-invariant.
+  - type: corporate_adjustment
+    params:
+      adjustments:
+        - columns: [DlyOpen, DlyHigh, DlyLow, DlyClose]
+          factor_column: CumFacPrc
+          operation: divide  # divide | multiply
+        - columns: [ShrOut, DlyVol]
+          factor_column: CumFacPrc
+          operation: multiply
+
+  # Validity checks; a failing row sets `target` (or `column`) to NaN for the imputers below.
+  # op: gt | ge | lt | le, against `bound` (a value) or `other_column`.
+  - type: consistency
+    params:
+      rules:
+        # cross-column ordering
+        - {column: DlyLow, op: le, other_column: DlyHigh, target: DlyLow}
+        - {column: DlyLow, op: le, other_column: DlyOpen, target: DlyLow}
+        - {column: DlyLow, op: le, other_column: DlyClose, target: DlyLow}
+        - {column: DlyHigh, op: ge, other_column: DlyOpen, target: DlyHigh}
+        - {column: DlyHigh, op: ge, other_column: DlyClose, target: DlyHigh}
+        # positivity of prices and shares outstanding
+        - {column: DlyOpen, op: gt, bound: 0.0}
+        - {column: DlyHigh, op: gt, bound: 0.0}
+        - {column: DlyLow, op: gt, bound: 0.0}
+        - {column: DlyClose, op: gt, bound: 0.0}
+        - {column: ShrOut, op: gt, bound: 0.0}
+        # non-negativity of volume and dollar volume
+        - {column: DlyVol, op: ge, bound: 0.0}
+        - {column: DlyPrcVol, op: ge, bound: 0.0}
+
+  - type: forward_fill  # carry the last value within an entity (shares are reported rarely)
+    params:
+      columns: [DlyOpen, DlyHigh, DlyLow, DlyClose, ShrOut, DlyCap]
+      limit: null  # null -> no cap on consecutive fills
+
+  - type: constant_fill  # a no-trade day has zero volume, not a carried-forward one
+    params:
+      columns: [DlyPrcVol, DlyVol]
+      value: 0.0
